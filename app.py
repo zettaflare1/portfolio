@@ -3,79 +3,68 @@ import sqlite3
 import pandas as pd
 import plotly.graph_objects as go
 
-# Configuración de la página
-st.set_page_config(page_title="Monitor de Bandas Cambiarias", layout="wide")
-
-
-
 def get_data():
-    # Conexión local al archivo que Git subirá por nosotros
-    conn = sqlite3.connect("Exchange_Rates.db") 
+    conn = sqlite3.connect("Exchange_Rates.db")
     query = "SELECT Date, Wholesale_USD, Exchange_Rate_Upper_Limit, Exchange_Rate_Lower_Limit FROM Rates ORDER BY Date ASC"
     df = pd.read_sql_query(query, conn)
     conn.close()
     df['Date'] = pd.to_datetime(df['Date'])
     return df
 
-st.title("📊 Monitor de Bandas Cambiarias - BCRA")
-st.markdown("Visualización en tiempo real de las bandas de intervención y el dólar mayorista.")
+df = get_data()
 
-try:
-    df = get_data()
+# --- LÓGICA DE SEPARACIÓN ---
+# Asumimos que el REM empieza donde el 'Wholesale_USD' (TC Real) deja de tener datos (es NaN)
+# O puedes definirlo por fecha si prefieres.
+df_real = df[df['Wholesale_USD'].notna()]
+df_rem = df[df['Wholesale_USD'].isna()]
 
-    # Filtro de fecha en el sidebar
-    st.sidebar.header("Filtros")
-    fecha_min = df['Date'].min().to_pydatetime()
-    fecha_max = df['Date'].max().to_pydatetime()
-    rango = st.sidebar.slider("Rango de fechas", fecha_min, fecha_max, (fecha_min, fecha_max))
+# Para que no haya un hueco en el gráfico, el último punto de 'real' debe ser el primero de 'rem'
+if not df_rem.empty:
+    last_real_row = df_real.tail(1)
+    df_rem = pd.concat([last_real_row, df_rem])
 
-    # Filtrar dataframe
-    mask = (df['Date'] >= rango[0]) & (df['Date'] <= rango[1])
-    df_filtered = df.loc[mask]
+fig = go.Figure()
 
-    # Crear el gráfico con Plotly
-    fig = go.Figure()
+# 1. Línea del Tipo de Cambio Mayorista (Sólida)
+fig.add_trace(go.Scatter(
+    x=df_real['Date'], y=df_real['Wholesale_USD'],
+    name="TC Mayorista (Real)",
+    line=dict(color='blue', width=3)
+))
 
-    # Área sombreada (Canal)
+# 2. Bandas Sólidas (Basadas en Inflación Real)
+fig.add_trace(go.Scatter(
+    x=df_real['Date'], y=df_real['Exchange_Rate_Upper_Limit'],
+    name="Techo (Inflación)",
+    line=dict(color='rgba(255, 0, 0, 0.5)', width=2)
+))
+fig.add_trace(go.Scatter(
+    x=df_real['Date'], y=df_real['Exchange_Rate_Lower_Limit'],
+    name="Piso (Inflación)",
+    line=dict(color='rgba(0, 128, 0, 0.5)', width=2)
+))
+
+# 3. Bandas Entrecortadas (Basadas en REM)
+if not df_rem.empty:
     fig.add_trace(go.Scatter(
-        x=df_filtered['Date'].tolist() + df_filtered['Date'].tolist()[::-1],
-        y=df_filtered['Exchange_Rate_Upper_Limit'].tolist() + df_filtered['Exchange_Rate_Lower_Limit'].tolist()[::-1],
-        fill='toself',
-        fillcolor='rgba(0,176,246,0.2)',
-        line=dict(color='rgba(255,255,255,0)'),
-        hoverinfo="skip",
-        showlegend=True,
-        name='Zona de Intervención'
+        x=df_rem['Date'], y=df_rem['Exchange_Rate_Upper_Limit'],
+        name="Techo (Proyección REM)",
+        line=dict(color='red', width=2, dash='dash') # <--- Aquí el estilo entrecortado
+    ))
+    fig.add_trace(go.Scatter(
+        x=df_rem['Date'], y=df_rem['Exchange_Rate_Lower_Limit'],
+        name="Piso (Proyección REM)",
+        line=dict(color='green', width=2, dash='dash') # <--- Aquí el estilo entrecortado
     ))
 
-    # Línea Techo
-    fig.add_trace(go.Scatter(x=df_filtered['Date'], y=df_filtered['Exchange_Rate_Upper_Limit'],
-                             line=dict(color='red', width=2, dash='dash'), name='Techo'))
+# Configuración estética
+fig.update_layout(
+    title="Monitoreo de Bandas de Tipo de Cambio (Real vs REM)",
+    xaxis_title="Fecha",
+    yaxis_title="ARS / USD",
+    hovermode="x unified",
+    template="plotly_white"
+)
 
-    # Línea Piso
-    fig.add_trace(go.Scatter(x=df_filtered['Date'], y=df_filtered['Exchange_Rate_Lower_Limit'],
-                             line=dict(color='green', width=2, dash='dash'), name='Piso'))
-
-    # Línea Dólar Mayorista
-    fig.add_trace(go.Scatter(x=df_filtered['Date'], y=df_filtered['Wholesale_USD'],
-                             line=dict(color='black', width=3), name='Dólar Mayorista'))
-
-    fig.update_layout(
-        xaxis_title="Fecha",
-        yaxis_title="Precio (ARS)",
-        hovermode="x unified",
-        template="plotly_white",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-    )
-
-    st.plotly_chart(fig, use_container_width=True)
-
-    # Métricas clave
-    col1, col2, col3 = st.columns(3)
-    hoy = df.iloc[-1]
-    col1.metric("Último Techo", f"${hoy['Exchange_Rate_Upper_Limit']:.2f}")
-    col2.metric("Último Piso", f"${hoy['Exchange_Rate_Lower_Limit']:.2f}")
-    col3.metric("Dólar Actual", f"${hoy['Wholesale_USD']:.2f}")
-
-except Exception as e:
-    st.error(f"Error al cargar los datos: {e}")
+st.plotly_chart(fig, use_container_width=True)
