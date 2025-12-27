@@ -6,8 +6,11 @@ import plotly.graph_objects as go
 # Configuración de la página
 st.set_page_config(page_title="Monitor de Bandas Cambiarias", layout="wide")
 
+
+
 def get_data():
-    conn = sqlite3.connect("/home/marcemorelli/portfolio/Exchange_Rates.db")
+    # Conexión local al archivo que Git subirá por nosotros
+    conn = sqlite3.connect("Exchange_Rates.db") 
     query = "SELECT Date, Wholesale_USD, Exchange_Rate_Upper_Limit, Exchange_Rate_Lower_Limit FROM Rates ORDER BY Date ASC"
     df = pd.read_sql_query(query, conn)
     conn.close()
